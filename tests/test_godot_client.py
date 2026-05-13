@@ -27,7 +27,7 @@ def test_client_writes_request_and_reads_response(monkeypatch, tmp_path: Path):
     config = make_config(tmp_path)
     client = TilePipeGodotClient(config)
 
-    def fake_run(args, cwd, capture_output, text, timeout, check):
+    def fake_run(args, cwd, capture_output, text, timeout, check, env):
         response_path = Path(args[args.index("--response") + 1])
         response_path.write_text(
             json.dumps({"ok": True, "command": "inspect_project", "outputs": {}, "metadata": {}}),
@@ -50,7 +50,7 @@ def test_client_raises_structured_error(monkeypatch, tmp_path: Path):
     config = make_config(tmp_path)
     client = TilePipeGodotClient(config)
 
-    def fake_run(args, cwd, capture_output, text, timeout, check):
+    def fake_run(args, cwd, capture_output, text, timeout, check, env):
         response_path = Path(args[args.index("--response") + 1])
         response_path.write_text(
             json.dumps({"ok": False, "command": "validate_tile", "errors": ["bad tile"]}),
@@ -64,4 +64,3 @@ def test_client_raises_structured_error(monkeypatch, tmp_path: Path):
         client.run("validate_tile", {"project_dir": "project"})
 
     assert error.value.result["errors"] == ["bad tile"]
-

@@ -23,7 +23,7 @@ class TilePipeConfig(BaseModel):
 		self.workspace = self.workspace.expanduser().resolve()
 		self.workspace.mkdir(parents=True, exist_ok=True)
 		if self.godot_bin is not None:
-			self.godot_bin = self.godot_bin.expanduser().resolve()
+			self.godot_bin = self._resolve_godot_bin(self.godot_bin)
 		if self.unity_project_root is not None:
 			self.unity_project_root = self.unity_project_root.expanduser().resolve()
 
@@ -82,3 +82,13 @@ class TilePipeConfig(BaseModel):
 		except ValueError:
 			return False
 
+	@staticmethod
+	def _resolve_godot_bin(path: Path) -> Path:
+		resolved = path.expanduser().resolve()
+		if resolved.is_dir():
+			candidates = sorted(resolved.glob("Godot*_win64.exe"))
+			if not candidates:
+				candidates = sorted(resolved.glob("*.exe"))
+			if candidates:
+				return candidates[0].resolve()
+		return resolved

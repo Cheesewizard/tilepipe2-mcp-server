@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import time
 import uuid
 from typing import Any
 
@@ -50,6 +52,10 @@ class TilePipeGodotClient:
             str(response_path),
         ]
 
+        env = os.environ.copy()
+        env["TILEPIPE_REQUEST"] = str(request_path)
+        env["TILEPIPE_RESPONSE"] = str(response_path)
+
         completed = subprocess.run(
             args,
             cwd=str(self.config.tilepipe2_repo),
@@ -57,7 +63,12 @@ class TilePipeGodotClient:
             text=True,
             timeout=self.config.timeout_seconds,
             check=False,
+            env=env,
         )
+
+        deadline = time.monotonic() + self.config.timeout_seconds
+        while not response_path.is_file() and time.monotonic() < deadline:
+            time.sleep(0.1)
 
         result: dict[str, Any] | None = None
         if response_path.is_file():
