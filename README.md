@@ -34,24 +34,43 @@ uv run tilepipe2-mcp
 - `tilepipe_health`
 - `tilepipe_list_projects`
 - `tilepipe_inspect_project`
+- `tilepipe_list_rulesets`
+- `tilepipe_list_templates`
+- `tilepipe_create_project_from_art`
+- `tilepipe_create_tile`
 - `tilepipe_validate_ruleset`
 - `tilepipe_validate_template`
 - `tilepipe_validate_tile`
 - `tilepipe_render_tile`
 - `tilepipe_export_texture`
 - `tilepipe_export_subtiles`
+- `tilepipe_export_mask_set`
 - `tilepipe_create_unity_wallkit_job`
 - `tilepipe_generate_unity_wallkit`
+- `tilepipe_generate_wallkit_candidate`
+- `tilepipe_generate_floor_candidate`
+- `tilepipe_validate_candidate_complete`
+- `tilepipe_prepare_unity_promotion`
+- `tilepipe_promote_with_unity_mcp`
 - `tilepipe_validate_unity_wallkit_output`
 - `tilepipe_write_validation_manifest`
 - `tilepipe_refresh_unity_assets`
 
 ## Unity Wall-Kit Workflow
 
-`tilepipe_generate_unity_wallkit` writes a staged output folder containing:
+`tilepipe_generate_wallkit_candidate` writes a staged output folder containing:
 
 - a combined PNG texture
 - optional split subtile PNGs
-- `tilepipe_wallkit_manifest.json`
+- `tilepipe_candidate_manifest.json`
 
-The manifest records source `.tptile`, ruleset/template metadata, generated bitmasks, missing masks, and Unity import recommendations. Active Unity runtime assets are not replaced by v1 tools.
+The manifest records source `.tptile`, ruleset/template metadata, generated bitmasks, expected masks, missing masks, PNG dimensions, and Unity import recommendations. Active Unity runtime assets are not replaced automatically.
+
+Use `tilepipe_prepare_unity_promotion` after candidate validation. It returns the explicit Unity MCP steps and requires a selected Unity target such as a `WallSetConfig`, RuleTile, or generated asset folder. Python never edits Unity `.asset` or `.meta` YAML directly.
+
+`tilepipe_create_project_from_art` and `tilepipe_create_tile` can build TilePipe2 `.tptile` files from source PNG art plus an existing ruleset/template. Created projects use TilePipe2's native folder layout:
+
+- `textures/`
+- `rulesets/`
+- `templates/`
+- `<name>.tptile`

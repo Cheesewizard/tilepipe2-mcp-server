@@ -1,15 +1,26 @@
 from pathlib import Path
 
 from tilepipe_mcp.manifests import (
+    WALL_REQUIRED_MASKS,
     build_unity_manifest,
+    validate_candidate_output,
     validate_unity_wallkit_output,
     write_manifest,
 )
 
 
+def write_png_header(path: Path, width: int, height: int):
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + b"\x00\x00\x00\rIHDR"
+        + width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+    )
+
+
 def test_manifest_round_trip(tmp_path: Path):
     texture = tmp_path / "wallkit.png"
-    texture.write_bytes(b"png")
+    write_png_header(texture, 192, 64)
     render_result = {
         "outputs": {"texture": str(texture)},
         "metadata": {
@@ -62,3 +73,22 @@ def test_validate_manifest_warns_nonstandard_tile_size():
     assert result["ok"] is True
     assert result["warnings"]
 
+
+def test_validate_candidate_reports_missing_required_masks(tmp_path: Path):
+    texture = tmp_path / "wallkit.png"
+    write_png_header(texture, 64, 64)
+    manifest = {
+        "candidate_type": "wallkit",
+        "outputs": {"texture": str(texture)},
+        "missing_masks": [],
+        "tile_size": {"x": 64, "y": 64},
+        "rendered_size": {"x": 64, "y": 64},
+        "generated_masks": [0],
+        "expected_masks": WALL_REQUIRED_MASKS,
+        "unity_import_recommendations": {"pixels_per_unit": 64},
+    }
+
+    result = validate_candidate_output(manifest)
+
+    assert result["ok"] is False
+    assert "Expected masks were not generated" in result["errors"][0]
