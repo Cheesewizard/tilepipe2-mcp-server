@@ -7,6 +7,7 @@ from fastmcp.exceptions import ValidationError
 from tilepipe_mcp.config import TilePipeConfig
 from tilepipe_mcp.server import (
     _init_config,
+    _slice_rendered_subtiles,
     tilepipe_create_tile,
     tilepipe_prepare_unity_promotion,
 )
@@ -79,3 +80,32 @@ def test_prepare_promotion_rejects_incomplete_candidate(tmp_path: Path):
             "Assets/Game/Art/Sprites/Generated/TilePipe2",
         )
 
+
+def test_slice_rendered_subtiles_uses_template_masks(tmp_path: Path):
+    from PIL import Image
+
+    texture = tmp_path / "render.png"
+    template = tmp_path / "template.png"
+    output_dir = tmp_path / "subtiles"
+
+    Image.new("RGBA", (64, 64), (10, 20, 30, 255)).save(texture)
+    template_image = Image.new("RGBA", (32, 32), (255, 255, 255, 255))
+    template_image.putpixel((16, 16), (0, 0, 0, 255))
+    template_image.putpixel((28, 16), (0, 0, 0, 255))
+    template_image.save(template)
+
+    result = _slice_rendered_subtiles(
+        render_result={
+            "outputs": {"texture": str(texture)},
+            "metadata": {
+                "template_path": str(template),
+                "output_tile_size": {"x": 64, "y": 64},
+            },
+        },
+        output_dir=output_dir,
+        tile_file="walls.tptile",
+        masks=[4],
+    )
+
+    assert len(result) == 1
+    assert Path(result[0]).name == "walls_frame_0_mask_4_variant_0.png"

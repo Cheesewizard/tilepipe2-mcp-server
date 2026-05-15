@@ -5,6 +5,7 @@ from tilepipe_mcp.manifests import (
     build_unity_manifest,
     validate_candidate_output,
     validate_unity_wallkit_output,
+    validate_wallkit_edge_seams,
     write_manifest,
 )
 
@@ -92,3 +93,34 @@ def test_validate_candidate_reports_missing_required_masks(tmp_path: Path):
 
     assert result["ok"] is False
     assert "Expected masks were not generated" in result["errors"][0]
+
+
+def write_rgba_png(path: Path, color: tuple[int, int, int, int]):
+    from PIL import Image
+
+    image = Image.new("RGBA", (4, 4), color)
+    image.save(path)
+
+
+def test_validate_wallkit_edge_seams_accepts_matching_edges(tmp_path: Path):
+    east = tmp_path / "tile_frame_0_mask_4_variant_0.png"
+    west = tmp_path / "tile_frame_0_mask_64_variant_0.png"
+    write_rgba_png(east, (10, 20, 30, 255))
+    write_rgba_png(west, (10, 20, 30, 255))
+
+    result = validate_wallkit_edge_seams([east, west])
+
+    assert result["ok"] is True
+    assert result["comparison_count"] == 2
+
+
+def test_validate_wallkit_edge_seams_rejects_mismatched_edges(tmp_path: Path):
+    east = tmp_path / "tile_frame_0_mask_4_variant_0.png"
+    west = tmp_path / "tile_frame_0_mask_64_variant_0.png"
+    write_rgba_png(east, (10, 20, 30, 255))
+    write_rgba_png(west, (11, 20, 30, 255))
+
+    result = validate_wallkit_edge_seams([east, west])
+
+    assert result["ok"] is False
+    assert "does not match" in result["errors"][0]

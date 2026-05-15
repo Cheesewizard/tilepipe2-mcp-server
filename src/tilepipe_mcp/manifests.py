@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from PIL import Image
 
 
 WALL_REQUIRED_MASKS = [
@@ -68,6 +71,13 @@ UNITY_IMPORT_RECOMMENDATIONS = {
     "mipmaps": False,
     "alpha_is_transparency": True,
 }
+
+MASK_NORTH = 1
+MASK_EAST = 4
+MASK_SOUTH = 16
+MASK_WEST = 64
+
+SUBTILE_MASK_PATTERN = re.compile(r"_mask_(\d+)_")
 
 
 def read_png_size(path: str | Path) -> dict[str, int]:
@@ -205,3 +215,172 @@ def validate_candidate_output(manifest: dict[str, Any]) -> dict[str, Any]:
 
 def validate_unity_wallkit_output(manifest: dict[str, Any]) -> dict[str, Any]:
     return validate_candidate_output(manifest)
+
+
+def validate_wallkit_edge_seams(
+    subtile_paths: list[str | Path],
+    *,
+    max_average_delta: float = 0.0,
+    max_pixel_delta: int = 0,
+) -> dict[str, Any]:
+    tiles = _load_first_variant_by_mask(subtile_paths)
+    errors: list[str] = []
+    warnings: list[str] = []
+    comparisons = 0
+
+    for mask, image in tiles.items():
+        if mask & MASK_EAST:
+            comparisons += 1
+            _compare_edges(
+                errors,
+                mask,
+                "east",
+                image,
+                _matching_tile(tiles, MASK_WEST),
+                "west",
+                max_average_delta,
+                max_pixel_delta,
+            )
+        if mask & MASK_WEST:
+            comparisons += 1
+            _compare_edges(
+                errors,
+                mask,
+                "west",
+                image,
+                _matching_tile(tiles, MASK_EAST),
+                "east",
+                max_average_delta,
+                max_pixel_delta,
+            )
+        if mask & MASK_NORTH:
+            comparisons += 1
+            _compare_edges(
+                errors,
+                mask,
+                "north",
+                image,
+                _matching_tile(tiles, MASK_SOUTH),
+                "south",
+                max_average_delta,
+                max_pixel_delta,
+            )
+        if mask & MASK_SOUTH:
+            comparisons += 1
+            _compare_edges(
+                errors,
+                mask,
+                "south",
+                image,
+                _matching_tile(tiles, MASK_NORTH),
+                "north",
+                max_average_delta,
+                max_pixel_delta,
+            )
+
+    if not tiles:
+        errors.append("No subtile PNGs were available for seam validation.")
+    if comparisons == 0 and tiles:
+        warnings.append("No connected mask edges were available for seam validation.")
+
+    for image in tiles.values():
+        image.close()
+
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "tile_count": len(tiles),
+        "comparison_count": comparisons,
+        "max_average_delta": max_average_delta,
+        "max_pixel_delta": max_pixel_delta,
+    }
+
+
+def validate_wallkit_manifest_edge_seams(
+    manifest: dict[str, Any],
+    *,
+    max_average_delta: float = 0.0,
+    max_pixel_delta: int = 0,
+) -> dict[str, Any]:
+    outputs = manifest.get("outputs") or {}
+    subtiles = outputs.get("subtiles") or []
+    return validate_wallkit_edge_seams(
+        subtiles,
+        max_average_delta=max_average_delta,
+        max_pixel_delta=max_pixel_delta,
+    )
+
+
+def _load_first_variant_by_mask(subtile_paths: list[str | Path]) -> dict[int, Image.Image]:
+    tiles: dict[int, Image.Image] = {}
+    for path_value in subtile_paths:
+        path = Path(path_value)
+        match = SUBTILE_MASK_PATTERN.search(path.name)
+        if match is None or int(match.group(1)) in tiles or not path.is_file():
+            continue
+        image = Image.open(path).convert("RGBA")
+        tiles[int(match.group(1))] = image
+    return tiles
+
+
+def _matching_tile(tiles: dict[int, Image.Image], required_edge: int) -> tuple[int, Image.Image] | None:
+    for mask, image in tiles.items():
+        if mask & required_edge:
+            return mask, image
+    return None
+
+
+def _compare_edges(
+    errors: list[str],
+    left_mask: int,
+    left_edge: str,
+    left_image: Image.Image,
+    right: tuple[int, Image.Image] | None,
+    right_edge: str,
+    max_average_delta: float,
+    max_pixel_delta: int,
+) -> None:
+    if right is None:
+        errors.append(f"Mask {left_mask} has {left_edge} connection but no matching {right_edge} tile exists.")
+        return
+
+    right_mask, right_image = right
+    left_pixels = _edge_pixels(left_image, left_edge)
+    right_pixels = _edge_pixels(right_image, right_edge)
+    if len(left_pixels) != len(right_pixels):
+        errors.append(
+            f"Mask {left_mask} {left_edge} edge length does not match mask {right_mask} {right_edge} edge."
+        )
+        return
+
+    total_delta = 0
+    worst_delta = 0
+    channel_count = len(left_pixels) * 4
+    for index, pixel in enumerate(left_pixels):
+        other = right_pixels[index]
+        for channel in range(4):
+            delta = abs(pixel[channel] - other[channel])
+            total_delta += delta
+            worst_delta = max(worst_delta, delta)
+
+    average_delta = total_delta / channel_count
+    if average_delta > max_average_delta or worst_delta > max_pixel_delta:
+        errors.append(
+            "Mask "
+            f"{left_mask} {left_edge} edge does not match mask {right_mask} {right_edge} edge "
+            f"(average delta {average_delta:.2f}, max delta {worst_delta})."
+        )
+
+
+def _edge_pixels(image: Image.Image, edge: str) -> list[tuple[int, int, int, int]]:
+    width, height = image.size
+    if edge == "north":
+        return [image.getpixel((x, 0)) for x in range(width)]
+    if edge == "south":
+        return [image.getpixel((x, height - 1)) for x in range(width)]
+    if edge == "west":
+        return [image.getpixel((0, y)) for y in range(height)]
+    if edge == "east":
+        return [image.getpixel((width - 1, y)) for y in range(height)]
+    raise ValueError(f"Unknown edge: {edge}")

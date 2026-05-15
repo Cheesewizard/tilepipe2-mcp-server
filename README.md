@@ -50,6 +50,7 @@ uv run tilepipe2-mcp
 - `tilepipe_generate_wallkit_candidate`
 - `tilepipe_generate_floor_candidate`
 - `tilepipe_validate_candidate_complete`
+- `tilepipe_validate_wallkit_edge_seams`
 - `tilepipe_prepare_unity_promotion`
 - `tilepipe_promote_with_unity_mcp`
 - `tilepipe_validate_unity_wallkit_output`
@@ -65,6 +66,8 @@ uv run tilepipe2-mcp
 - `tilepipe_candidate_manifest.json`
 
 The manifest records source `.tptile`, ruleset/template metadata, generated bitmasks, expected masks, missing masks, PNG dimensions, and Unity import recommendations. Active Unity runtime assets are not replaced automatically.
+
+Use `tilepipe_validate_wallkit_edge_seams` before promotion. It opens the split subtile PNGs from the manifest and compares connected north/south/east/west border pixels, so candidates with visible connector gaps fail before Unity import.
 
 Use `tilepipe_prepare_unity_promotion` after candidate validation. It returns the explicit Unity MCP steps and requires a selected Unity target such as a `WallSetConfig`, RuleTile, or generated asset folder. Python never edits Unity `.asset` or `.meta` YAML directly.
 
