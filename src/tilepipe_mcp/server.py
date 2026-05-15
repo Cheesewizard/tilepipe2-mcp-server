@@ -10,6 +10,7 @@ from typing import Any, TypeVar, cast
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError, ValidationError
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from .config import TilePipeConfig
@@ -20,6 +21,7 @@ from .manifests import (
     build_unity_manifest,
     validate_candidate_output,
     validate_unity_wallkit_output,
+    validate_wallkit_manifest_edge_seams,
     write_manifest,
 )
 
@@ -100,6 +102,86 @@ def _default_candidate_dir(candidate_type: str, job_name: str) -> Path:
 
 def _normalize_project_dir(project_dir: str | Path) -> str:
     return str(Path(project_dir).expanduser().resolve())
+
+
+def _slice_rendered_subtiles(
+    *,
+    render_result: dict[str, Any],
+    output_dir: Path,
+    tile_file: str,
+    masks: list[int] | None,
+) -> list[str]:
+    outputs = render_result.get("outputs") or {}
+    metadata = render_result.get("metadata") or {}
+    texture_path = outputs.get("texture")
+    template_path = metadata.get("template_path")
+    tile_size = metadata.get("output_tile_size") or {}
+    if not texture_path or not Path(texture_path).is_file():
+        raise ToolError("Cannot slice subtiles because rendered texture output is missing.")
+    if not template_path or not Path(template_path).is_file():
+        raise ToolError("Cannot slice subtiles because TilePipe template metadata is missing.")
+
+    tile_width = int(tile_size.get("x", 64))
+    tile_height = int(tile_size.get("y", 64))
+    requested_masks = set(masks or [])
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    rendered = Image.open(texture_path).convert("RGBA")
+    template = Image.open(template_path).convert("RGBA")
+    exported: list[str] = []
+    tile_name = Path(tile_file).stem
+    variant_by_mask: dict[int, int] = {}
+
+    try:
+        for template_y in range(template.height // 32):
+            for template_x in range(template.width // 32):
+                if _is_template_empty(template, template_x, template_y):
+                    continue
+                mask = _template_mask_value(template, template_x, template_y)
+                if requested_masks and mask not in requested_masks:
+                    continue
+                variant_index = variant_by_mask.get(mask, 0)
+                variant_by_mask[mask] = variant_index + 1
+                subtile = rendered.crop(
+                    (
+                        template_x * tile_width,
+                        template_y * tile_height,
+                        template_x * tile_width + tile_width,
+                        template_y * tile_height + tile_height,
+                    )
+                )
+                path = output_dir / f"{tile_name}_frame_0_mask_{mask}_variant_{variant_index}.png"
+                subtile.save(path)
+                exported.append(str(path))
+    finally:
+        rendered.close()
+        template.close()
+
+    return exported
+
+
+def _is_template_empty(template: Image.Image, template_x: int, template_y: int) -> bool:
+    return template.getpixel((template_x * 32 + 16, template_y * 32 + 16))[:3] == (255, 255, 255)
+
+
+def _template_mask_value(template: Image.Image, template_x: int, template_y: int) -> int:
+    checks = {
+        1: (16, 4),
+        2: (28, 4),
+        4: (28, 16),
+        8: (28, 28),
+        16: (16, 28),
+        32: (4, 28),
+        64: (4, 16),
+        128: (4, 4),
+    }
+    value = 0
+    for mask, point in checks.items():
+        x = template_x * 32 + point[0]
+        y = template_y * 32 + point[1]
+        if template.getpixel((x, y))[:3] != (255, 255, 255):
+            value += mask
+    return value
 
 
 @tool("tilepipe_health")
@@ -371,15 +453,25 @@ def _generate_candidate(
 
     if export_subtiles:
         subtiles_dir = job_output_dir / "subtiles"
-        subtile_result = tilepipe_export_mask_set(
-            project_dir,
-            tile_file,
-            str(subtiles_dir),
-            expected_masks,
-        )
-        render_result.setdefault("outputs", {})["subtiles"] = subtile_result.get("outputs", {}).get(
-            "subtiles", []
-        )
+        try:
+            subtile_result = tilepipe_export_mask_set(
+                project_dir,
+                tile_file,
+                str(subtiles_dir),
+                expected_masks,
+            )
+            subtiles = subtile_result.get("outputs", {}).get("subtiles", [])
+        except ToolError as error:
+            render_result.setdefault("warnings", []).append(
+                f"Godot subtile export failed; sliced subtiles from rendered texture instead: {error}"
+            )
+            subtiles = _slice_rendered_subtiles(
+                render_result=render_result,
+                output_dir=subtiles_dir,
+                tile_file=tile_file,
+                masks=expected_masks,
+            )
+        render_result.setdefault("outputs", {})["subtiles"] = subtiles
 
     manifest = build_candidate_manifest(
         job_name=safe_name,
@@ -450,6 +542,24 @@ def tilepipe_validate_candidate_complete(manifest_path: str) -> dict[str, Any]:
         raise ValidationError(f"Manifest file does not exist: {manifest_file}")
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     return validate_candidate_output(manifest)
+
+
+@tool("tilepipe_validate_wallkit_edge_seams")
+def tilepipe_validate_wallkit_edge_seams(
+    manifest_path: str,
+    max_average_delta: float = 0.0,
+    max_pixel_delta: int = 0,
+) -> dict[str, Any]:
+    """Validate that connected wall subtiles share identical border pixels."""
+    manifest_file = _require_config().resolve_read_path(manifest_path)
+    if not manifest_file.is_file():
+        raise ValidationError(f"Manifest file does not exist: {manifest_file}")
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    return validate_wallkit_manifest_edge_seams(
+        manifest,
+        max_average_delta=max_average_delta,
+        max_pixel_delta=max_pixel_delta,
+    )
 
 
 @tool("tilepipe_prepare_unity_promotion")
